@@ -1,4 +1,4 @@
-#! /bin/msh
+#! /bin/bash
 
 # Go into the directory of the application.
 P=`readlink -f "$0"`
@@ -10,8 +10,9 @@ killall app 2> /dev/null
 
 # Copy the web interface to the http server's root directory.
 echo "Setting up the web interface ..."
-rm -rf /home/httpd/*
-gzip -d < www.tar.gz | tar -x -C /home/httpd/
+sudo rm -rf /var/www/*
+gzip -d < www.tar.gz | sudo tar -x -C /var/www/
+sudo chown -R www-data:www-data /var/www
 
 # Run the application
 echo "Running the application..."

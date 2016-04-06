@@ -26,7 +26,8 @@ struct TEMPLATE data;
  *//*********************************************************************/
 OscFunction(static Init, const int argc, const char * argv[])
 
-	uint8 multiBufferIds[2] = {0, 1};
+	uint8 multiBufferIds[NR_FRAME_BUFFERS] = {0, 1, 2};
+	int i;
 
 	memset(&data, 0, sizeof(struct TEMPLATE));
 
@@ -37,7 +38,7 @@ OscFunction(static Init, const int argc, const char * argv[])
 		&OscModule_vis,
 		&OscModule_hsm,
 		&OscModule_ipc,
-		&OscModule_gpio,
+//		&OscModule_gpio,
 		&OscModule_log,
 		&OscModule_sup);
 
@@ -56,9 +57,11 @@ OscFunction(static Init, const int argc, const char * argv[])
 
 	/* Set up two frame buffers for maximum image size. Cached memory.
 	 * Register the buffers as multi-buffer for the camera */
-	OscCall( OscCamSetFrameBuffer, 0, OSC_CAM_MAX_IMAGE_WIDTH*OSC_CAM_MAX_IMAGE_HEIGHT, data.u8FrameBuffers[0], TRUE);
-	OscCall( OscCamSetFrameBuffer, 1, OSC_CAM_MAX_IMAGE_WIDTH*OSC_CAM_MAX_IMAGE_HEIGHT, data.u8FrameBuffers[1], TRUE);
-	OscCall( OscCamCreateMultiBuffer, 2, multiBufferIds);
+	for(i = 0; i < NR_FRAME_BUFFERS; i++)
+	{
+		OscCall( OscCamSetFrameBuffer, i, NUMCOL_PLANES*OSC_CAM_MAX_IMAGE_WIDTH*OSC_CAM_MAX_IMAGE_HEIGHT, data.u8FrameBuffers[i], TRUE);
+	}
+	OscCall( OscCamCreateMultiBuffer, NR_FRAME_BUFFERS, multiBufferIds);
 
 	/* Register an IPC channel to the CGI for the web interface. */
 	OscCall( OscIpcRegisterChannel, &data.ipc.ipcChan, USER_INTERFACE_SOCKET_PATH, F_IPC_SERVER | F_IPC_NONBLOCKING);

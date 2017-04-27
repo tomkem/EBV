@@ -6,7 +6,7 @@
 /*! @file process_frame.c
  * @brief Contains the actual algorithm and calculations.
  */
-
+ 
 /* Definitions specific to this application. Also includes the Oscar main header file. */
 #include "template.h"
 #include <string.h>
@@ -17,42 +17,196 @@
 const int nc = OSC_CAM_MAX_IMAGE_WIDTH;
 const int nr = OSC_CAM_MAX_IMAGE_HEIGHT;
 
-int TextColor;
+bool ManualThreshold;
+
+/* skip pixel at border */
+const int Border = 2;
+
+/* minimum size of objects (sum of all pixels) */
+const int MinArea = 500;
+
+/* size of centroid marker */
+const int SizeCross = 10;
+
+struct OSC_VIS_REGIONS ImgRegions;/* these contain the foreground objects */
+
+unsigned char OtsuThreshold(int InIndex);
+void Binarize(unsigned char threshold);
+void Erode_3x3(int InIndex, int OutIndex);
+void Dilate_3x3(int InIndex, int OutIndex);
+void DetectRegions();
+void DrawBoundingBoxes();
 
 
 void ResetProcess()
 {
 	//called when "reset" button is pressed
-	if(TextColor == CYAN)
-		TextColor = MAGENTA;
+	if(ManualThreshold == false)
+		ManualThreshold = true;
 	else
-		TextColor = CYAN;
+		ManualThreshold = false;
 }
 
 
-void ProcessFrame()
-{
-	char Text[] = "hallo world";
+void ProcessFrame() {
 	//initialize counters
 	if(data.ipc.state.nStepCounter == 1) {
-		//use for initialization; only done in first step
-		memset(data.u8TempImage[THRESHOLD], 0, IMG_SIZE);
-		TextColor = CYAN;
+		ManualThreshold = false;
 	} else {
-		//example for copying sensor image to background image
-		memcpy(data.u8TempImage[BACKGROUND], data.u8TempImage[SENSORIMG], IMG_SIZE);
+		unsigned char Threshold = OtsuThreshold(SENSORIMG);
 
-		//example for drawing output
-		//draw line
-		DrawLine(10, 100, 200, 20, RED);
-		//draw open rectangle
-		DrawBoundingBox(20, 10, 50, 40, false, GREEN);
-		//draw filled rectangle
-		DrawBoundingBox(80, 100, 110, 120, true, BLUE);
-		DrawString(200, 200, strlen(Text), TINY, TextColor, Text);
+		Binarize(Threshold);
+
+		Erode_3x3(THRESHOLD, INDEX0);
+		Dilate_3x3(INDEX0, THRESHOLD);
+
+		DetectRegions();
+
+		DrawBoundingBoxes();
+
+		if(ManualThreshold) {
+			char Text[] = "manual threshold";
+			DrawString(20, 20, strlen(Text), SMALL, CYAN, Text);
+		} else {
+			char Text[] = " Otsu's threshold";
+			DrawString(20, 20, strlen(Text), SMALL, CYAN, Text);
+		}
 	}
 }
 
 
+
+void Binarize(unsigned char threshold) {
+	int r, c;
+	//set result buffer to zero
+	memset(data.u8TempImage[THRESHOLD], 0, IMG_SIZE);
+
+	//loop over the rows
+	for(r = Border*nc; r < (nr-Border)*nc; r += nc) {
+		//loop over the columns
+		for(c = Border; c < (nc-Border); c++) {
+			//manual threshold?
+			if(ManualThreshold) {
+				if(data.u8TempImage[SENSORIMG][r+c] < data.ipc.state.nThreshold) {
+					data.u8TempImage[THRESHOLD][r+c] = 255;
+				}
+			} else {
+				if(data.u8TempImage[SENSORIMG][r+c] < threshold) {
+					data.u8TempImage[THRESHOLD][r+c] = 255;
+				}
+			}
+		}
+	}
+}
+
+
+unsigned char OtsuThreshold(int InIndex) {
+	//first part: extract gray value histogram
+	unsigned int i1, best_i, K;
+	float Hist[256];
+	unsigned char* p = data.u8TempImage[InIndex];
+	float best;
+	memset(Hist, 0, sizeof(Hist));
+
+	for(i1 = 0; i1 < nr*nc; i1++) {
+		Hist[p[i1]] += 1;
+	}
+	//second part: determine threshold according to Otsu's method
+	best = 0;
+	best_i = 0;
+	for(K = 0; K < 255; K++)	{
+		//the class accumulators
+		float w0 = 0, mu0 = 0, w1 = 0, mu1 = 0;
+		float bestloc;
+
+		//class 0 and 1 probabilities and averages
+		for(i1 = 0; i1 <= K; i1++)	{
+			w0 += Hist[i1];
+			mu0 += (Hist[i1]*i1);
+		}
+		for(; i1 <= 255; i1++) {
+			w1 += Hist[i1];
+			mu1 += (Hist[i1]*i1);
+		}
+		//do normalization of average values
+		mu0 /= w0;
+		mu1 /= w1;
+
+		bestloc = w0*w1*(mu0-mu1)*(mu0-mu1);
+		if(bestloc > best) {
+			best = bestloc;
+			best_i = K;
+			//OscLog(INFO, "%d %d %d %d %d\n", i1, w0, w1, mu0, mu1);
+		}
+	}
+	//OscLog(INFO, "%d %f\n", best_i, best);
+	return (unsigned char) best_i;
+}
+
+void Erode_3x3(int InIndex, int OutIndex)
+{
+	int c, r;
+
+	for(r = Border*nc; r < (nr-Border)*nc; r += nc) {
+		for(c = Border; c < (nc-Border); c++) {
+			unsigned char* p = &data.u8TempImage[InIndex][r+c];
+			data.u8TempImage[OutIndex][r+c] = *(p-nc-1) & *(p-nc) & *(p-nc+1) &
+											   *(p-1)    & *p      & *(p+1)    &
+											   *(p+nc-1) & *(p+nc) & *(p+nc+1);
+		}
+	}
+}
+
+void Dilate_3x3(int InIndex, int OutIndex)
+{
+	int c, r;
+
+	for(r = Border*nc; r < (nr-Border)*nc; r += nc) {
+		for(c = Border; c < (nc-Border); c++) {
+			unsigned char* p = &data.u8TempImage[InIndex][r+c];
+			data.u8TempImage[OutIndex][r+c] = *(p-nc-1) | *(p-nc) | *(p-nc+1) |
+											        *(p-1)    | *p      | *(p+1)    |
+											        *(p+nc-1) | *(p+nc) | *(p+nc+1);
+		}
+	}
+}
+
+
+void DetectRegions() {
+	struct OSC_PICTURE Pic;
+	int i;
+
+	//set pixel value to 1 in INDEX0 because the image MUST be binary (i.e. values of 0 and 1)
+	for(i = 0; i < IMG_SIZE; i++) {
+		data.u8TempImage[INDEX0][i] = data.u8TempImage[THRESHOLD][i] ? 1 : 0;
+	}
+
+	//wrap image INDEX0 in picture struct
+	Pic.data = data.u8TempImage[INDEX0];
+	Pic.width = nc;
+	Pic.height = nr;
+	Pic.type = OSC_PICTURE_BINARY;
+
+	//now do region labeling and feature extraction
+	OscVisLabelBinary( &Pic, &ImgRegions);
+	OscVisGetRegionProperties( &ImgRegions);
+}
+
+
+void DrawBoundingBoxes() {
+	uint16 o;
+	for(o = 0; o < ImgRegions.noOfObjects; o++) {
+		if(ImgRegions.objects[o].area > MinArea) {
+			DrawBoundingBox(ImgRegions.objects[o].bboxLeft, ImgRegions.objects[o].bboxTop,
+							ImgRegions.objects[o].bboxRight, ImgRegions.objects[o].bboxBottom, false, GREEN);
+
+			DrawLine(ImgRegions.objects[o].centroidX-SizeCross, ImgRegions.objects[o].centroidY,
+					 ImgRegions.objects[o].centroidX+SizeCross, ImgRegions.objects[o].centroidY, RED);
+			DrawLine(ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY-SizeCross,
+								 ImgRegions.objects[o].centroidX, ImgRegions.objects[o].centroidY+SizeCross, RED);
+
+		}
+	}
+}
 
 
